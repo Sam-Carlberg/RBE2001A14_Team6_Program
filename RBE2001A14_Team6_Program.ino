@@ -513,7 +513,7 @@ int ArisGame(){
     break;
   case TURN3:
     if(getMovementSignal()){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && (turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)|| timeLocal > 3*WAIT_TIME)){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && (turnAround(WAIT_TIME+ TURN_WAIT_TIME/6, CCW)|| timeLocal > 2*WAIT_TIME)){
         intensity = HIGH_INTENSITY;
         reset=1;
         ArisGameState++;
