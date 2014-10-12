@@ -22,7 +22,7 @@ boolean readPacket() {
     Serial.println("Got packet");
     for(int i = 0; i < 10; i++) {
       Serial.print(packet[i]); 
-      Serial.print("  ");
+      Serial.print(" ");
     }
     Serial.println();
 
@@ -166,16 +166,16 @@ boolean isSupplyTubeAvailable(int tubeNumber) {
 void sendMessages() {
   if(sendHB) {
     sendHeartbeat();
-    sendHB = false;
+    sendHB = false;       // reset flag
   }
   if(sendRadAlert && radiationLevel != NO_RAD) {
     delay(20);            // delay to make sure the field gets the message
     sendRadiationAlert();
-    sendRadAlert = false;
+    sendRadAlert = false; // reset flag
   }
   if(sendStatus) {
     delay(20);            // delay to make sure the field gets the message
     sendRobotStatus();
-    sendStatus = false;
+    sendStatus = false;   // reset flag
   }
 }
