@@ -20,7 +20,7 @@ enum MessageType {
  *  Radiation level constants
  */
 enum RadiationLevel {
-  NO_RAD = 0x00,
+  NO_RADIATION       = 0x00,
   CARRYING_SPENT_ROD = 0x2C,
   CARRYING_NEW_ROD   = 0xFF
 };
@@ -40,12 +40,12 @@ enum GripperStatus {
 };
 
 enum OperationStatus {
-  GRIP_ATTEMPT     = 0x01, 
-  GRIP_RELEASE     = 0x02, 
+  GRIP_ATTEMPT       = 0x01, 
+  GRIP_RELEASE       = 0x02, 
   DRIVING_TO_REACTOR = 0x03, 
   DRIVING_TO_STORAGE = 0x04, 
   DRIVING_TO_SUPPLY  = 0x05, 
-  IDLE             = 0x06
+  IDLE               = 0x06
 };
 
 #endif

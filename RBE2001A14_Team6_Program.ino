@@ -125,6 +125,7 @@ int clawState;
 #define LED_HIGH 30
 #define LED_LOW 31
 #define LED_START 38
+#define INIT_JUMPER_PIN 23
 
 // BLUETOOTH
 
@@ -139,24 +140,24 @@ boolean sendHB       = false;
 boolean sendRadAlert = false;
 boolean sendStatus   = false;
 
-boolean shouldMove = true;
-boolean onLowSideOfField = true;
+boolean shouldMove = true; // has the field controller told us to move?
+boolean onLowSideOfField = true; // are we on the side of the field with low-numbered lanes?
 
-// target tubes (normally 0 to 3, initialized to 255)
-byte supplyTarget  = 255;
-byte storageTarget = 255;
+// target tubes
+byte supplyTarget  = 0;
+byte storageTarget = 0;
 
-byte radiationLevel  = NO_RAD;
+byte radiationLevel  = NO_RADIATION;
 byte movementStatus  = STOPPED;
 byte gripperStatus   = NO_ROD;
 byte operationStatus = IDLE;
 
 //Lets Play a game.
-int ArisGameState=0;
+int ArisGameState = 0;
 #define ARISGAMESPEED .2
 
-enum ArisGameState{
-  DRIVE_TO_CENTER,
+enum GameStates {
+  DRIVE_TO_CENTER1,
   DRIVE_TO_REACTOR,
   GRAB_SPENT_ROD,
   SLIGHTREVERSE1,
@@ -225,9 +226,9 @@ void limitHitUp(void){
 }
 
 void setup(){
-  Timer1.initialize(1000);			        //initializes timer with a period of 1ms
-  Timer1.attachInterrupt(incrementTime); 		//increments time every 1ms
-  MotorNw.attach(MOTOR_NW, 1000, 2000);
+  Timer1.initialize(1000);			        // initializes timer with a period of 1ms
+  Timer1.attachInterrupt(incrementTime);// increments time every 1ms
+  MotorNw.attach(MOTOR_NW, 1000, 2000); // 393 motors need different duty cycles
   MotorSe.attach(MOTOR_SE, 1000, 2000);
   MotorNe.attach(MOTOR_NE, 1000, 2000);
   MotorSw.attach(MOTOR_SW, 1000, 2000); 
@@ -238,6 +239,7 @@ void setup(){
   pinMode(LED_HIGH, OUTPUT);
   pinMode(LED_START, OUTPUT);
   pinMode(START_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(INIT_JUMPER_PIN, INPUT_PULLUP);
 
 #if 0
   attachInterrupt(LIMIT_FRONT_INTERRUPT, limitHitFront, RISING); 
@@ -259,37 +261,41 @@ void setup(){
   pinMode(_SC_LS, INPUT);
   pinMode(_E_LS, INPUT);
   pinMode(_W_LS, INPUT);
+
+  onLowSideOfField = digitalRead(INIT_JUMPER_PIN);
+
   Serial.begin(9600);
-  MotorNw.write(MOTOR_STOP);
-  MotorNe.write(MOTOR_STOP);
-  MotorSw.write(MOTOR_STOP);
-  MotorSe.write(MOTOR_STOP);
+  MotorNw.write(90);
+  MotorNe.write(90);
+  MotorSw.write(90);
+  MotorSe.write(90);
 }
 
 void loop(){
   readPacket();
+  sendMessages();
+  setRadiationLED();
   tryStart();
   if(started) {
-    sendMessages();
-    setRadiationLED();
-    // ArisGame();
+    ArisGame();
   }
 }
 
-// moved to a fucniton to declutter loop()
+// moved to a function to declutter loop()
 void tryStart() {
   if(!started) {
-    started = digitalRead(START_BUTTON_PIN) == LOW;
+    if(digitalRead(START_BUTTON_PIN) == LOW) {
+      started = !started;
+    }
     if(started) {
       digitalWrite(LED_START, HIGH);
-      Serial.println("STARTED");
     }
   }
 }
 
 //sets LED radiation signal
 void setRadiationLED(){
-  if(radiationLevel == NO_RAD){
+  if(radiationLevel == NO_RADIATION){
     digitalWrite(LED_HIGH,LOW);
     digitalWrite(LED_LOW,LOW);
   }
@@ -302,10 +308,11 @@ void setRadiationLED(){
     digitalWrite(LED_LOW,HIGH);
   }
 }
+
 //Let's Play a Game.
 int ArisGame(){
   switch(ArisGameState){
-  case DRIVE_TO_CENTER:
+  case DRIVE_TO_CENTER1:
     operationStatus = DRIVING_TO_REACTOR;
     if(shouldMove){ //add in deadzone
       if(goToLine()==1){
@@ -354,7 +361,7 @@ int ArisGame(){
     break;
   case DRIVE_TO_STORAGE_LINE:
     if(shouldMove){
-      if(reset==0 && dirCount(3, BACKWARD)){
+      if(reset==0 && dirCount(storageTarget + 1, BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -406,7 +413,7 @@ int ArisGame(){
     if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
       ArisGameState++;
       bounceNumCrosses=0;
-      radiationLevel = NO_RAD;
+      radiationLevel = NO_RADIATION;
       gripperStatus = NO_ROD;
       moveDirection(0, STOP);
       reset=1;
@@ -464,7 +471,7 @@ int ArisGame(){
     break;
   case  DRIVE_TO_SUPPLY_LINE: 
     if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(1, BACKWARD)){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(abs(storageTarget - supplyTarget), BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -516,7 +523,7 @@ int ArisGame(){
     if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
       ArisGameState++;
       bounceNumCrosses=0;
-      radiationLevel=NO_RAD;
+      radiationLevel=NO_RADIATION;
       moveDirection(0, STOP);
       reset=1;
     }
@@ -690,8 +697,8 @@ boolean goToLineNorth(char dir){
     }
     break;
   case GO_STOP:
-    MotorNe.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP);
+    MotorNe.write(90);
+    MotorNw.write(90);
     if(getLS(_NW_LS)==BLACK){
       newGoToLineStateNorth = GO_RIGHT;
     }
@@ -742,8 +749,8 @@ boolean goToLineSouth(char dir){
     }
     break;
   case GO_STOP:
-    MotorSe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP);
+    MotorSe.write(90);
+    MotorSw.write(90);
     if(getLS(_SW_LS)==BLACK){
       newGoToLineStateSouth = GO_RIGHT;
     }
@@ -820,8 +827,8 @@ boolean turnAroundNorth(int waitTime, char dir){
     }
     break;
   case GO_STOP:
-    MotorNe.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP);
+    MotorNe.write(90);
+    MotorNw.write(90);
     if(getLS(_NC_LS)==BLACK )
       return true;
     else if(getLS(_NW_LS)==BLACK){
@@ -884,8 +891,8 @@ boolean turnAroundSouth(int waitTime, char dir){
     }
     break;
   case GO_STOP:
-    MotorSe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP);
+    MotorSe.write(90);
+    MotorSw.write(90);
     if(getLS(_SC_LS)==BLACK)
       return true;
     else if(getLS(_SW_LS)==BLACK){
@@ -922,22 +929,24 @@ void moveAdjusted(float spd, float adjSpdFront,float adjSpdBack, int dir){
   movementStatus = AUTONOMOUS;
   switch(dir){
   case FORWARD:
-    MotorSe.write(MOTOR_STOP -spd + adjSpdBack*MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP +spd + adjSpdBack*MOTOR_STOP);
-    MotorNe.write(MOTOR_STOP -spd + adjSpdFront*MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP +spd + adjSpdFront*MOTOR_STOP);
+    MotorSe.write(90 -spd + adjSpdBack*90);
+    MotorSw.write(90 +spd + adjSpdBack*90);
+    MotorNe.write(90 -spd + adjSpdFront*90);
+    MotorNw.write(90 +spd + adjSpdFront*90);
     break;
   case BACKWARD:
-    MotorSe.write(MOTOR_STOP +spd + adjSpdBack*MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP -spd + adjSpdBack*MOTOR_STOP);
-    MotorNe.write(MOTOR_STOP +spd + adjSpdFront*MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP -spd + adjSpdFront*MOTOR_STOP);
+    MotorSe.write(90 +spd + adjSpdBack*90);
+    MotorSw.write(90 -spd + adjSpdBack*90);
+    MotorNe.write(90 +spd + adjSpdFront*90);
+    MotorNw.write(90 -spd + adjSpdFront*90);
     break;
   }
 } 
 
-//given grab/place, a first and last position, it will first move to the first position, grab or place a rod, and then move to the last location
-//returns true if complete, false otherwise
+// given grab/place, a first and last position, 
+// it will first move to the first position, grab or place a rod, 
+// and then move to the last location
+// returns true if complete, false otherwise
 boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
   switch(clawState){
   case ARM_FIRST: //go to the first location
@@ -968,14 +977,14 @@ boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
 //Spins the claw for CLAW_RUN_TIME ms in the desired direction
 //returns true if complete, false if in process
 void moveClaw(char dir){
-  if(dir==CW){
-    MotorClaw.write(MOTOR_MAX_CW);
+  if(dir == CW){
+    MotorClaw.write(180);
   }
-  else if(dir==CCW){
-    MotorClaw.write(MOTOR_MAX_CCW);
+  else if(dir == CCW){
+    MotorClaw.write(0);
   }
   else{
-    MotorClaw.write(MOTOR_STOP);
+    MotorClaw.write(90);
   }
 }
 
@@ -1004,7 +1013,7 @@ boolean moveArm(int pos){
     Serial.println("GO DOWN");
   }
   if(pos==currentPositionClaw){
-    MotorArm.write(MOTOR_STOP);
+    MotorArm.write(90);
     Serial.println("GOOD JOB");
     return true;
   }
@@ -1050,22 +1059,22 @@ void motorTest(){
 // given a power and a direction, it will turn the robot in that direction
 void turnDirection(double power, int dir){
   if(dir == CCW){
-    MotorNe.write(MOTOR_STOP - power * MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP - power * MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP - power * MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP - power * MOTOR_STOP);
+    MotorNe.write(90 - power * 90);
+    MotorSe.write(90 - power * 90);
+    MotorSw.write(90 - power * 90);
+    MotorNw.write(90 - power * 90);
   }  
   else if(dir == CW){
-    MotorNe.write(MOTOR_STOP + power * MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP + power * MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP + power * MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP + power * MOTOR_STOP);
+    MotorNe.write(90 + power * 90);
+    MotorSe.write(90 + power * 90);
+    MotorSw.write(90 + power * 90);
+    MotorNw.write(90 + power * 90);
   } 
   else{
-    MotorNe.write(MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP);
+    MotorNe.write(90);
+    MotorSe.write(90);
+    MotorSw.write(90);
+    MotorNw.write(90);
   }
 }
 
@@ -1076,65 +1085,65 @@ void moveDirection(double power, char dir) {
   movementStatus = AUTONOMOUS;
   switch(dir) {
   case FORWARD_LEFT:
-    MotorNe.write(MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP + MOTOR_STOP * power);
+    MotorNe.write(90);
+    MotorSe.write(90 - 90 * power);
+    MotorSw.write(90);
+    MotorNw.write(90 + 90 * power);
     break;
   case BACKWARD_RIGHT:
-    MotorNe.write(MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP - MOTOR_STOP * power);
+    MotorNe.write(90);
+    MotorSe.write(90 + 90 * power);
+    MotorSw.write(90);
+    MotorNw.write(90 - 90 * power);
     break;
   case BACKWARD_LEFT:
-    MotorNe.write(MOTOR_STOP - MOTOR_STOP *power);
-    MotorSe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP);
+    MotorNe.write(90 - 90 *power);
+    MotorSe.write(90);
+    MotorSw.write(90 + 90 * power);
+    MotorNw.write(90);
     break;
   case FORWARD_RIGHT:
-    MotorNe.write(MOTOR_STOP + MOTOR_STOP *power);
-    MotorSe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP);
+    MotorNe.write(90 + 90 *power);
+    MotorSe.write(90);
+    MotorSw.write(90 - 90 * power);
+    MotorNw.write(90);
     break;
   case STOP:
-    MotorNe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP);
+    MotorNe.write(90);
+    MotorSw.write(90);
+    MotorNw.write(90);
+    MotorSe.write(90);
     movementStatus = STOPPED;
     break;
   case RIGHT:
-    MotorNe.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorSe.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP + MOTOR_STOP * power);
+    MotorNe.write(90 + 90 * power);
+    MotorSe.write(90 - 90 * power);
+    MotorSw.write(90 - 90 * power);
+    MotorNw.write(90 + 90 * power);
     break;
   case BACKWARD:
-    MotorNe.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorSe.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP - MOTOR_STOP * power);
+    MotorNe.write(90 + 90 * power);
+    MotorSe.write(90 + 90 * power);
+    MotorSw.write(90 - 90 * power);
+    MotorNw.write(90 - 90 * power);
     break;
   case LEFT:
-    MotorNe.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorSe.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP - MOTOR_STOP * power);
+    MotorNe.write(90 - 90 * power);
+    MotorSe.write(90 + 90 * power);
+    MotorSw.write(90 + 90 * power);
+    MotorNw.write(90 - 90 * power);
     break;
   case FORWARD:
-    MotorNe.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorSe.write(MOTOR_STOP - MOTOR_STOP * power);
-    MotorSw.write(MOTOR_STOP + MOTOR_STOP * power);
-    MotorNw.write(MOTOR_STOP + MOTOR_STOP * power);
+    MotorNe.write(90 - 90 * power);
+    MotorSe.write(90 - 90 * power);
+    MotorSw.write(90 + 90 * power);
+    MotorNw.write(90 + 90 * power);
     break;
   default:
-    MotorNe.write(MOTOR_STOP);
-    MotorSw.write(MOTOR_STOP);
-    MotorNw.write(MOTOR_STOP);
-    MotorSe.write(MOTOR_STOP);
+    MotorNe.write(90);
+    MotorSw.write(90);
+    MotorNw.write(90);
+    MotorSe.write(90);
     break;
   }
 }

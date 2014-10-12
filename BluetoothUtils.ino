@@ -168,7 +168,7 @@ void sendMessages() {
     sendHeartbeat();
     sendHB = false;       // reset flag
   }
-  if(sendRadAlert && radiationLevel != NO_RAD) {
+  if(sendRadAlert && radiationLevel != NO_RADIATION) {
     delay(20);            // delay to make sure the field gets the message
     sendRadiationAlert();
     sendRadAlert = false; // reset flag
