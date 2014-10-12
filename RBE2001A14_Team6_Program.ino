@@ -125,11 +125,11 @@ int clawState;
 #define LED_HIGH 30
 #define LED_LOW 31
 #define LED_START 38
-#define INIT_JUMPER_PIN 23
+#define INIT_JUMPER_PIN 2
 
 // BLUETOOTH
 
-#define START_BUTTON_PIN 22 // just put a jumper between VCC and SIG here
+#define START_BUTTON_PIN 24 // just put a jumper between VCC and SIG here
 boolean started = false;
 
 BluetoothMaster bluetooth;
@@ -144,20 +144,24 @@ boolean shouldMove = true; // has the field controller told us to move?
 boolean onLowSideOfField = true; // are we on the side of the field with low-numbered lanes?
 
 // target tubes
-byte supplyTarget  = 0;
-byte storageTarget = 0;
+// these should be between 1 and 4, inclusive, unless something bad happened
+byte supplyTarget  = 1;
+byte storageTarget = 1;
 
 byte radiationLevel  = NO_RADIATION;
 byte movementStatus  = STOPPED;
 byte gripperStatus   = NO_ROD;
 byte operationStatus = IDLE;
 
+// flag for printing variables etc. to Serial
+boolean debug = true;
+
 //Lets Play a game.
 int ArisGameState = 0;
 #define ARISGAMESPEED .2
 
 enum GameStates {
-  DRIVE_TO_CENTER1,
+  DRIVE_TO_CENTER,
   DRIVE_TO_REACTOR,
   GRAB_SPENT_ROD,
   SLIGHTREVERSE1,
@@ -166,7 +170,7 @@ enum GameStates {
   TURN_TO_STORAGE_LINE,
   DRIVE_TO_STORAGE_TUBE,
   DEPOSIT_SPENT_ROD,
-  DRIVE_TO_CENTER2,
+  DRIVE_BACK_FROM_STORAGE,
   OVERSHOTCHECK2,
   TURN_TO_CENTER1,
   SLIGHTREVERSE2,
@@ -175,7 +179,7 @@ enum GameStates {
   TURN_TO_SUPPLY_LINE,
   DRIVE_TO_SUPPLY_TUBE,
   GRAB_NEW_ROD,
-  DRIVE_TO_CENTER3,
+  DRIVE_BACK_FROM_SUPPLY,
   OVERSHOTCHECK4,
   TURN_TO_CENTER2,
   DRIVE_BACK_TO_REACTOR,
@@ -232,8 +236,8 @@ void setup(){
   MotorSe.attach(MOTOR_SE, 1000, 2000);
   MotorNe.attach(MOTOR_NE, 1000, 2000);
   MotorSw.attach(MOTOR_SW, 1000, 2000); 
-  MotorArm.attach(MOTOR_ARM);
-  MotorClaw.attach(MOTOR_CLAW);
+  MotorArm.attach(MOTOR_ARM, 1000, 2000);
+  MotorClaw.attach(MOTOR_CLAW, 1000, 2000);
 
   pinMode(LED_LOW, OUTPUT);
   pinMode(LED_HIGH, OUTPUT);
@@ -272,18 +276,21 @@ void setup(){
 }
 
 void loop(){
-  readPacket();
-  sendMessages();
-  setRadiationLED();
+  // readPacket();
   tryStart();
   if(started) {
-    ArisGame();
+    // sendMessages();
+    // playGameBT();
+    // setRadiationLED();
+    while(!grabAndPlace(CCW,CLAW_UP, CLAW_UP));
+    while(1);
   }
 }
 
 // moved to a function to declutter loop()
 void tryStart() {
   if(!started) {
+    // have a jumper between GND and signal because the pin floats high
     started = digitalRead(START_BUTTON_PIN) == LOW;
     if(started) {
       digitalWrite(LED_START, HIGH);
@@ -307,10 +314,16 @@ void setRadiationLED(){
   }
 }
 
-//Let's Play a Game.
-int ArisGame(){
+/*
+ *   The main state machine code.
+ *
+ *   This executes a different part of the game based on the current state of the robot, 
+ * and changes it if it's completed that stage of the game.
+ */
+int playGameBT() {
+  if(debug) Serial.println("Game state: " + String(ArisGameState));
   switch(ArisGameState){
-  case DRIVE_TO_CENTER1:
+  case DRIVE_TO_CENTER:
     operationStatus = DRIVING_TO_REACTOR;
     if(shouldMove){ //add in deadzone
       if(goToLine()==1){
@@ -359,7 +372,303 @@ int ArisGame(){
     break;
   case DRIVE_TO_STORAGE_LINE:
     if(shouldMove){
-      if(reset==0 && dirCount(storageTarget + 1, BACKWARD)){
+      if(reset==0 && dirCount(storageTarget, BACKWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case OVERSHOTCHECK1:
+    if(shouldMove){
+      if(reset==0 && timeLocal > WAIT_TIME &&  dirOvershoot(FORWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case TURN_TO_STORAGE_LINE:
+    if(shouldMove){
+      if(reset==0 && timeLocal > WAIT_TIME && 
+          (turnAround(TURN_WAIT_TIME, getDirToStorage()) || timeLocal> 3*WAIT_TIME)){// addtime out
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DRIVE_TO_STORAGE_TUBE:
+    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
+      dirCount(2, FORWARD);
+      if(!digitalRead(LIMIT_FRONT)){
+        bounceNumCrosses= 0;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DEPOSIT_SPENT_ROD:   
+    moveDirection(0, STOP);
+    operationStatus = GRIP_RELEASE;
+    if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
+      ArisGameState++;
+      bounceNumCrosses=0;
+      radiationLevel = NO_RADIATION;
+      gripperStatus = NO_ROD;
+      moveDirection(0, STOP);
+      reset=1;
+    }
+    break;
+  case DRIVE_BACK_FROM_STORAGE:
+    operationStatus = DRIVING_TO_SUPPLY;
+    if(shouldMove){
+      if(reset==0 && (dirCount(1, BACKWARD) || timeLocal > 5*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case OVERSHOTCHECK2:
+    if(shouldMove){
+      if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD)||timeLocal > 1.5*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case  TURN_TO_CENTER1:
+    if(shouldMove){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, getDirToSupply())){
+        radiationLevel = CARRYING_NEW_ROD;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        bounceNumCrosses=0;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case SLIGHTREVERSE2:
+    if(shouldMove){
+      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .13*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case  DRIVE_TO_SUPPLY_LINE: 
+    if(shouldMove){
+      if(reset==0 &&
+          timeLocal > .75*WAIT_TIME &&
+          dirCount(abs(storageTarget - supplyTarget), storageTarget > supplyTarget ? BACKWARD : FORWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case  OVERSHOTCHECK3:
+    if(shouldMove){
+      if(reset==0 && timeLocal > .5*WAIT_TIME &&  dirOvershoot(FORWARD) || timeLocal > 1*WAIT_TIME){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case TURN_TO_SUPPLY_LINE:  //check
+    if(shouldMove){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, getDirToSupply())){
+        radiationLevel = CARRYING_NEW_ROD;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DRIVE_TO_SUPPLY_TUBE:
+    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
+      dirCount(2, FORWARD);
+      if(!digitalRead(LIMIT_FRONT)){
+        bounceNumCrosses= 0;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case GRAB_NEW_ROD:   
+    moveDirection(0, STOP);
+    if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
+      ArisGameState++;
+      bounceNumCrosses=0;
+      radiationLevel=NO_RADIATION;
+      moveDirection(0, STOP);
+      reset=1;
+    }
+    break;
+  case DRIVE_BACK_FROM_SUPPLY:
+    if(shouldMove){
+      if(reset==0 && dirCount(1, BACKWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case OVERSHOTCHECK4:
+    if(shouldMove){
+      if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD)||timeLocal > 1.5*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case TURN_TO_CENTER2: 
+    if(shouldMove){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CW)){
+        radiationLevel = CARRYING_NEW_ROD;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DRIVE_BACK_TO_REACTOR:
+    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
+      dirCount(2, FORWARD);
+      if(!digitalRead(LIMIT_FRONT)){
+        bounceNumCrosses= 0;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DEPOSIT_NEW_ROD:
+    moveDirection(0, STOP);
+    radiationLevel=CARRYING_SPENT_ROD;
+    if(grabAndPlace(CW, CLAW_DOWN, CLAW_UP)){
+      reset=1;
+      ArisGameState++;
+      moveDirection(0, STOP);
+    }
+    break;
+    //bad but yea
+  case TURN5: 
+    if(shouldMove){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)){
+        radiationLevel = CARRYING_NEW_ROD;
+        reset=1;
+        ArisGameState=DRIVE_TO_REACTOR;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  }
+  return ArisGameState;
+}
+
+int ArisGame(){
+  switch(ArisGameState){
+  case DRIVE_TO_CENTER:
+    operationStatus = DRIVING_TO_REACTOR;
+    if(shouldMove){ //add in deadzone
+      if(goToLine()==1){
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DRIVE_TO_REACTOR:
+    operationStatus = DRIVING_TO_REACTOR;
+    if(shouldMove){
+      dirCount(9, FORWARD);
+      if(!digitalRead(LIMIT_FRONT)){
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case GRAB_SPENT_ROD:
+    moveDirection(0, STOP);
+    operationStatus = GRIP_ATTEMPT;
+    radiationLevel = CARRYING_SPENT_ROD;
+    if(grabAndPlace(CW, CLAW_DOWN, CLAW_UP)){
+      reset=1;
+      ArisGameState++;
+      moveDirection(0, STOP);
+    }
+    break;
+  case SLIGHTREVERSE1:
+    operationStatus = DRIVING_TO_STORAGE;
+    if(shouldMove){
+      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .5*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DRIVE_TO_STORAGE_LINE:
+    if(shouldMove){
+      if(reset==0 && dirCount(3, BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -417,7 +726,7 @@ int ArisGame(){
       reset=1;
     }
     break;
-  case DRIVE_TO_CENTER2:
+  case DRIVE_BACK_FROM_STORAGE:
     operationStatus = DRIVING_TO_SUPPLY;
     if(shouldMove){
       if(reset==0 && (dirCount(1, BACKWARD) || timeLocal > 5*WAIT_TIME)){
@@ -469,7 +778,7 @@ int ArisGame(){
     break;
   case  DRIVE_TO_SUPPLY_LINE: 
     if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(abs(storageTarget - supplyTarget), BACKWARD)){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(1, BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -526,7 +835,7 @@ int ArisGame(){
       reset=1;
     }
     break;
-  case DRIVE_TO_CENTER3:
+  case DRIVE_BACK_FROM_SUPPLY:
     if(shouldMove){
       if(reset==0 && dirCount(1, BACKWARD)){
         reset=1;
@@ -607,7 +916,7 @@ int getLS(int lineSensor){
 }
 
 void testLS(){
-  Serial.println("NE-NC-NW-E-SE-SC-SW-W");  
+  Serial.print("NE-NC-NW-E-SE-SC-SW-W\t");  
   Serial.print(getLS(_NE_LS));
   Serial.print('\t');
   Serial.print(getLS(_NC_LS));
@@ -622,8 +931,7 @@ void testLS(){
   Serial.print('\t');
   Serial.print(getLS(_SW_LS));
   Serial.print('\t');
-  Serial.print(getLS(_W_LS));
-  Serial.print('\t');
+  Serial.println(getLS(_W_LS));
 }
 
 boolean dirOvershoot(int dir){
@@ -641,8 +949,10 @@ boolean dirOvershoot(int dir){
 //returns true when the number of crosses passed equals the number desired
 boolean dirCount(int crosses, int dir){
   bounceAdjust();
-  Serial.println(bounceNumCrosses);
-  Serial.println(crosses);
+  if(debug) {
+    Serial.println(bounceNumCrosses);
+    Serial.println(crosses);
+  }
   moveAdjusted(15, bounceErrorPowerFront, bounceErrorPowerRear, dir);
   if(bounceNumCrosses == crosses){
     bounceNumCrosses=0;
@@ -957,10 +1267,11 @@ boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
     if(reset==0){ //grab or place the rod based on time
       moveClaw(grabOrPlace);
       if(timeLocal>=CLAW_RUN_TIME){
+        MotorClaw.write(90);
         clawState=ARM_LAST;
       }
     }
-    Serial.println("No Im here.");
+    if(debug) Serial.println("No Im here.");
     break;
   case ARM_LAST: //move to the last location
     if(moveArm(lastLocation)){
@@ -989,7 +1300,6 @@ void moveClaw(char dir){
 //Moves the arm to the desired position based on limit switches
 //returns true if complete, false if in motion
 boolean moveArm(int pos){
-  return true; //CHANGE ME
   //sets current position
   if(!digitalRead(LIMIT_CLAW_UP)){ 
     currentPositionClaw=CLAW_UP;
@@ -1003,16 +1313,16 @@ boolean moveArm(int pos){
   //if you want to be where you are, stop
   //otherwise, go there
   if(pos==CLAW_UP){
-    MotorArm.write(70);
-    Serial.println("GO UP");
+    MotorArm.write(140);
+    if(debug) Serial.println("GO UP");
   }
   else if(pos==CLAW_DOWN){
-    MotorArm.write(110);
-    Serial.println("GO DOWN");
+    MotorArm.write(70);
+    if(debug) Serial.println("GO DOWN");
   }
   if(pos==currentPositionClaw){
     MotorArm.write(90);
-    Serial.println("GOOD JOB");
+    if(debug) Serial.println("GOOD JOB");
     return true;
   }
   return false;
@@ -1146,6 +1456,25 @@ void moveDirection(double power, char dir) {
   }
 }
 
+/*
+ * Gets the direction we need to turn to go down the storage lane
+ */
+byte getDirToStorage() {
+  if(onLowSideOfField) return CCW;
+  else return CW;
+}
 
+/*
+ * Gets the direction we need to turn to go from the storage lane to the supply lane
+ */
+byte getDirToSupply() {
+  // storage < supply: CCW
+  // storage > supply: CW
+  // otherwise it doesn't matter
+  // example: storage = 3, supply = 1: turn CW, back up 2, turn CW
+  if(storageTarget < supplyTarget) return CCW;
+  if(storageTarget > supplyTarget) return CW;
+  else return CW;
+}
 
 
