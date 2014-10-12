@@ -9,11 +9,9 @@
 //LINE TRACK FUNCTIONS
 //MOTOR FUNCTIONS
 
-#include <BluetoothMaster.h>
-#include <ReactorProtocol.h>
-#include "PacketConstants.h"
-#include "Constants.h"
+#include <PPM.h>
 #include "Servo.h"
+#include "PPM.h"
 #include "TimerOne.h"
 
 //PINS
@@ -21,7 +19,6 @@
 #define MOTOR_NE  6  //NORTH
 #define MOTOR_NW  12 //WEST 
 #define MOTOR_SE  13 //EAST
-//393 have to be here. dont ask why TA's, it's above your paygrade.
 
 #define MOTOR_ARM 11
 #define MOTOR_CLAW 10
@@ -31,19 +28,22 @@
 #define LIMIT_CLAW_UP             23
 #define LIMIT_CLAW_ROD            22
 
+#define START_BUTTON              24
+#define POTENTIOMETER A6
+
 /* #define LIMIT_FRONT_INTERRUPT      0
  * #define LIMIT_CLAW_DOWN_INTERRUPT  4
  * #define LIMIT_CLAW_UP_INTERRUPT    3
  */
 //Line Sensor PINS
 #define _E_LS  A0
-#define _NE_LS A9 //10 11 bad
+#define _NE_LS A9
 #define _NC_LS A8
 #define _NW_LS A11
 #define _W_LS  A7
-#define _SW_LS A2
+#define _SW_LS A4
 #define _SC_LS A3
-#define _SE_LS A4
+#define _SE_LS A2
 
 //directions for movement
 #define FORWARD        1
@@ -116,72 +116,74 @@ int turnAroundNorthState = INIT_GO_TO_LINE;
 
 #define CLAW_UP 1
 #define CLAW_DOWN 0
-#define CLAW_RUN_TIME 3000 //ms
+#define SUPPLY 2
+#define CLAW_RUN_TIME 2500 //ms
+#define SUPPLY_POSITION 250
+#define ARM_UP_POSITION 163
+#define ARM_DOWN_POSITION 856
 
 int currentPositionClaw=7;
+int currentPositionPot = 7;
 int clawState;
 
 //LED radiation
 #define LED_HIGH 30
 #define LED_LOW 31
-#define LED_START 38
-#define INIT_JUMPER_PIN 23
+#define NO_INTENSITY 0
+#define LOW_INTENSITY 1
+#define HIGH_INTENSITY 2
 
-// BLUETOOTH
-
-#define START_BUTTON_PIN 22 // just put a jumper between VCC and SIG here
-boolean started = false;
-
-BluetoothMaster bluetooth;
-ReactorProtocol protocol(TEAM_NUMBER);
-
-// flags for sending messages
-boolean sendHB       = false;
-boolean sendRadAlert = false;
-boolean sendStatus   = false;
-
-boolean shouldMove = true; // has the field controller told us to move?
-boolean onLowSideOfField = true; // are we on the side of the field with low-numbered lanes?
-
-// target tubes
-byte supplyTarget  = 0;
-byte storageTarget = 0;
-
-byte radiationLevel  = NO_RADIATION;
-byte movementStatus  = STOPPED;
-byte gripperStatus   = NO_ROD;
-byte operationStatus = IDLE;
+int intensity = NO_INTENSITY;
 
 //Lets Play a game.
-int ArisGameState = 0;
+int ArisGameState=0;
 #define ARISGAMESPEED .2
+#define FIRST_SIDE 1
+#define SECOND_SIDE 0
+boolean side = FIRST_SIDE;
 
-enum GameStates {
-  DRIVE_TO_CENTER1,
-  DRIVE_TO_REACTOR,
-  GRAB_SPENT_ROD,
+enum ArisGameState{
+  GOTOLINE,
+  FORWARDTOLIMIT1,
+  REALIGNFORWARD1,
+  DEPLOYCLAW1,
   SLIGHTREVERSE1,
-  DRIVE_TO_STORAGE_LINE,
+  REVERSETOLINE1,
   OVERSHOTCHECK1,
-  TURN_TO_STORAGE_LINE,
-  DRIVE_TO_STORAGE_TUBE,
-  DEPOSIT_SPENT_ROD,
-  DRIVE_TO_CENTER2,
-  OVERSHOTCHECK2,
-  TURN_TO_CENTER1,
+  TURN1,
+  FORWARDTOLIMIT2,
+  REALIGNFORWARD2,
+  DEPLOYCLAW2,
   SLIGHTREVERSE2,
-  DRIVE_TO_SUPPLY_LINE,
+  REVERSETOLINE2,
+  OVERSHOTCHECK2,
+  TURN2,
+  SLIGHTREVERSE3,
+  REVERSETOLINE3,
   OVERSHOTCHECK3,
-  TURN_TO_SUPPLY_LINE,
-  DRIVE_TO_SUPPLY_TUBE,
-  GRAB_NEW_ROD,
-  DRIVE_TO_CENTER3,
+  TURN3,
+  FORWARDTOLIMIT3,
+  REALIGNFORWARD3,
+  DEPLOYCLAW3,
+  SLIGHTREVERSE4,
+  REVERSETOLINE4,
   OVERSHOTCHECK4,
-  TURN_TO_CENTER2,
-  DRIVE_BACK_TO_REACTOR,
-  DEPOSIT_NEW_ROD,
-  TURN5  
+  TURN4,
+  FORWARDTOLIMIT4,
+  REALIGNFORWARD4,
+  DEPLOYCLAW4,
+
+  SLIGHTREVERSE5,
+  REVERSETOLINE5,
+  OVERSHOOTCHECK5,
+  TURN5,
+  TURN6  
 };
+
+//teleop
+PPM ppm(2);
+double front_back;
+double left_right;
 
 //motors
 Servo MotorNw;
@@ -201,16 +203,8 @@ void incrementTime(){
   else{
     timeLocal++;
   }
-
+  //*SAM* BLUE TOOTH
   timeTotal++; //time is measured in milliseconds
-  
-  if(started && timeTotal % 2000 == 0) { // set heartbeat and radiation alert flags
-    sendHB = true;
-    sendRadAlert = true;
-  }
-  if(started && timeTotal % 5000 == 0) { // set robot status flag
-    sendStatus = true;
-  }
 }
 
 void limitHitFront(void){
@@ -226,20 +220,20 @@ void limitHitUp(void){
 }
 
 void setup(){
-  Timer1.initialize(1000);			        // initializes timer with a period of 1ms
-  Timer1.attachInterrupt(incrementTime);// increments time every 1ms
-  MotorNw.attach(MOTOR_NW, 1000, 2000); // 393 motors need different duty cycles
+  Timer1.initialize(1000);			        //initializes timer with a period of 1ms
+  Timer1.attachInterrupt(incrementTime); 		//increments time every 1ms
+  MotorNw.attach(MOTOR_NW, 1000, 2000);
   MotorSe.attach(MOTOR_SE, 1000, 2000);
   MotorNe.attach(MOTOR_NE, 1000, 2000);
   MotorSw.attach(MOTOR_SW, 1000, 2000); 
-  MotorArm.attach(MOTOR_ARM);
-  MotorClaw.attach(MOTOR_CLAW);
+  MotorArm.attach(MOTOR_ARM, 1000, 2000);
+  MotorClaw.attach(MOTOR_CLAW, 1000, 2000);
 
   pinMode(LED_LOW, OUTPUT);
   pinMode(LED_HIGH, OUTPUT);
-  pinMode(LED_START, OUTPUT);
-  pinMode(START_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(INIT_JUMPER_PIN, INPUT_PULLUP);
+
+  pinMode(START_BUTTON, INPUT_PULLUP);
+  pinMode(POTENTIOMETER, INPUT);
 
 #if 0
   attachInterrupt(LIMIT_FRONT_INTERRUPT, limitHitFront, RISING); 
@@ -261,83 +255,84 @@ void setup(){
   pinMode(_SC_LS, INPUT);
   pinMode(_E_LS, INPUT);
   pinMode(_W_LS, INPUT);
-
-  onLowSideOfField = digitalRead(INIT_JUMPER_PIN);
-
   Serial.begin(9600);
-  MotorNw.write(90);
-  MotorNe.write(90);
-  MotorSw.write(90);
-  MotorSe.write(90);
 }
 
 void loop(){
-  readPacket();
-  sendMessages();
-  setRadiationLED();
-  tryStart();
-  if(started) {
+  while(digitalRead(START_BUTTON));
+  while(1){
     ArisGame();
   }
 }
 
-// moved to a function to declutter loop()
-void tryStart() {
-  if(!started) {
-    started = digitalRead(START_BUTTON_PIN) == LOW;
-    if(started) {
-      digitalWrite(LED_START, HIGH);
-    }
-  }
+//blue tooth functions
+void heartbeat(){
+}
+void sendRadiation(int intensity){
+}
+boolean getMovementSignal(){
+  return true;
 }
 
 //sets LED radiation signal
-void setRadiationLED(){
-  if(radiationLevel == NO_RADIATION){
+void setRadiationLED(int intensity){
+  if(intensity==NO_INTENSITY){
     digitalWrite(LED_HIGH,LOW);
     digitalWrite(LED_LOW,LOW);
   }
-  else if(radiationLevel == CARRYING_SPENT_ROD){
+  else if(intensity==LOW_INTENSITY){
     digitalWrite(LED_HIGH,LOW);
     digitalWrite(LED_LOW,HIGH);
   }
-  else if(radiationLevel == CARRYING_NEW_ROD){
+  else if(intensity==HIGH_INTENSITY){
     digitalWrite(LED_HIGH,HIGH);
     digitalWrite(LED_LOW,HIGH);
   }
 }
-
 //Let's Play a Game.
 int ArisGame(){
+  setRadiationLED(intensity);
   switch(ArisGameState){
-  case DRIVE_TO_CENTER1:
-    operationStatus = DRIVING_TO_REACTOR;
-    if(shouldMove){ //add in deadzone
+  case GOTOLINE:
+    if(getMovementSignal()){
       if(goToLine()==1){
         ArisGameState++;
+        reset=1;
         moveDirection(0, STOP);
       }
     }
     else
       moveDirection(0, STOP);
     break;
-  case DRIVE_TO_REACTOR:
-    operationStatus = DRIVING_TO_REACTOR;
-    if(shouldMove){
+  case FORWARDTOLIMIT1:
+    if(getMovementSignal()){
       dirCount(9, FORWARD);
       if(!digitalRead(LIMIT_FRONT)){
         ArisGameState++;
         bounceNumCrosses = 0;
         moveDirection(0, STOP);
+        reset=1;
       }
     }
     else
       moveDirection(0, STOP);
     break;
-  case GRAB_SPENT_ROD:
+  case REALIGNFORWARD1:
+    if(getMovementSignal()){
+      dirCount(9, FORWARD);
+      if(reset==0 && timeLocal >= .25*WAIT_TIME){
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        reset=1;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;   
+  case DEPLOYCLAW1:
     moveDirection(0, STOP);
-    operationStatus = GRIP_ATTEMPT;
-    radiationLevel = CARRYING_SPENT_ROD;
+    intensity=LOW_INTENSITY;
     if(grabAndPlace(CW, CLAW_DOWN, CLAW_UP)){
       reset=1;
       ArisGameState++;
@@ -345,8 +340,7 @@ int ArisGame(){
     }
     break;
   case SLIGHTREVERSE1:
-    operationStatus = DRIVING_TO_STORAGE;
-    if(shouldMove){
+    if(getMovementSignal()){
       if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .5*WAIT_TIME)){
         reset=1;
         ArisGameState++;
@@ -357,10 +351,11 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case DRIVE_TO_STORAGE_LINE:
-    if(shouldMove){
-      if(reset==0 && dirCount(storageTarget + 1, BACKWARD)){
+  case REVERSETOLINE1:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .25*WAIT_TIME && dirCount(3, BACKWARD)){
         reset=1;
+        bounceNumCrosses = 0;
         ArisGameState++;
         moveDirection(0, STOP);
       }
@@ -369,8 +364,8 @@ int ArisGame(){
       moveDirection(0, STOP);
     break;
   case OVERSHOTCHECK1:
-    if(shouldMove){
-      if(reset==0 && timeLocal > WAIT_TIME &&  dirOvershoot(FORWARD)){
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME &&  dirOvershoot(FORWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -379,9 +374,9 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case TURN_TO_STORAGE_LINE:
-    if(shouldMove){
-      if(reset==0 && timeLocal > WAIT_TIME && (turnAround(TURN_WAIT_TIME, CW) || timeLocal> 3*WAIT_TIME)){// addtime out
+  case TURN1:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && (turnAround(TURN_WAIT_TIME, CW) || timeLocal> 2.5*WAIT_TIME)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -392,8 +387,8 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case DRIVE_TO_STORAGE_TUBE:
-    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
+  case FORWARDTOLIMIT2:
+    if(getMovementSignal() && reset==0 && timeLocal > .75*WAIT_TIME){
       dirCount(2, FORWARD);
       if(!digitalRead(LIMIT_FRONT)){
         bounceNumCrosses= 0;
@@ -405,22 +400,45 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case DEPOSIT_SPENT_ROD:   
+
+  case REALIGNFORWARD2:
+    if(getMovementSignal()){
+      dirCount(9, FORWARD);
+      if(reset==0 && timeLocal >= .25*WAIT_TIME){
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        reset=1;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DEPLOYCLAW2:   
     moveDirection(0, STOP);
-    operationStatus = GRIP_RELEASE;
     if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
       ArisGameState++;
       bounceNumCrosses=0;
-      radiationLevel = NO_RADIATION;
-      gripperStatus = NO_ROD;
+      intensity=NO_INTENSITY;
       moveDirection(0, STOP);
       reset=1;
     }
     break;
-  case DRIVE_TO_CENTER2:
-    operationStatus = DRIVING_TO_SUPPLY;
-    if(shouldMove){
-      if(reset==0 && (dirCount(1, BACKWARD) || timeLocal > 5*WAIT_TIME)){
+  case SLIGHTREVERSE2:
+    if(getMovementSignal()){
+      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .6*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;     
+  case REVERSETOLINE2:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .25*WAIT_TIME && (dirCount(1, BACKWARD) || timeLocal > 5*WAIT_TIME)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -430,7 +448,7 @@ int ArisGame(){
       moveDirection(0, STOP);
     break;
   case OVERSHOTCHECK2:
-    if(shouldMove){
+    if(getMovementSignal()){
       if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD)||timeLocal > 1.5*WAIT_TIME)){
         reset=1;
         ArisGameState++;
@@ -442,10 +460,10 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case  TURN_TO_CENTER1:
-    if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)){
-        radiationLevel = CARRYING_NEW_ROD;
+  case  TURN2:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && (turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW) || timeLocal>= 5.5*WAIT_TIME)){
+        intensity = HIGH_INTENSITY;
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -455,9 +473,9 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case SLIGHTREVERSE2:
-    if(shouldMove){
-      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .13*WAIT_TIME)){
+  case SLIGHTREVERSE3:
+    if(getMovementSignal()){
+      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal > .1*WAIT_TIME)){
         reset=1;
         ArisGameState++;
         bounceNumCrosses = 0;
@@ -467,22 +485,24 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case  DRIVE_TO_SUPPLY_LINE: 
-    if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(abs(storageTarget - supplyTarget), BACKWARD)){
+  case  REVERSETOLINE3: 
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && dirCount(1, BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
+        bounceNumCrosses=0;
       }
     }
     else
       moveDirection(0, STOP);
     break;
   case  OVERSHOTCHECK3:
-    if(shouldMove){
-      if(reset==0 && timeLocal > .5*WAIT_TIME &&  dirOvershoot(FORWARD) || timeLocal > 1*WAIT_TIME){
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD) || timeLocal > 2*WAIT_TIME)){
         reset=1;
         ArisGameState++;
+        bounceNumCrosses=0;
         moveDirection(0, STOP);
         turnAroundNorthState = INIT_GO_TO_LINE;
         turnAroundSouthState = INIT_GO_TO_LINE;
@@ -491,20 +511,21 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case TURN_TO_SUPPLY_LINE:  //check
-    if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)){
-        radiationLevel = CARRYING_NEW_ROD;
+  case TURN3:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && (turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)|| timeLocal > 3*WAIT_TIME)){
+        intensity = HIGH_INTENSITY;
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
+        bounceNumCrosses=0;
       }
     }
     else
       moveDirection(0, STOP);
     break;
-  case DRIVE_TO_SUPPLY_TUBE:
-    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
+  case FORWARDTOLIMIT3:
+    if(getMovementSignal() && reset==0 && timeLocal > WAIT_TIME){
       dirCount(2, FORWARD);
       if(!digitalRead(LIMIT_FRONT)){
         bounceNumCrosses= 0;
@@ -516,19 +537,69 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case GRAB_NEW_ROD:   
+  case REALIGNFORWARD3:
+    if(getMovementSignal()){
+      dirCount(9, FORWARD);
+      if(reset==0 && timeLocal >= .25*WAIT_TIME){
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        reset=1;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DEPLOYCLAW3:   
     moveDirection(0, STOP);
-    if(grabAndPlace(CCW, CLAW_UP, CLAW_UP)){
+    if(grabAndPlace(CW, SUPPLY, CLAW_UP)){
       ArisGameState++;
       bounceNumCrosses=0;
-      radiationLevel=NO_RADIATION;
+      intensity=HIGH_INTENSITY;
       moveDirection(0, STOP);
       reset=1;
     }
     break;
-  case DRIVE_TO_CENTER3:
-    if(shouldMove){
-      if(reset==0 && dirCount(1, BACKWARD)){
+  case SLIGHTREVERSE4:
+    if(getMovementSignal()){
+      if(reset==0 && (dirCount(9, BACKWARD) || timeLocal>.5*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        bounceNumCrosses=0;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case REVERSETOLINE4:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal> .25*WAIT_TIME && dirCount(1, BACKWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        bounceNumCrosses=0;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case OVERSHOTCHECK4:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD)||timeLocal > 2*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case TURN4: 
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CW)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -537,8 +608,68 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case OVERSHOTCHECK4:
-    if(shouldMove){
+  case FORWARDTOLIMIT4:
+    if(getMovementSignal() && reset==0 && timeLocal > WAIT_TIME){
+      dirCount(2, FORWARD);
+      if(!digitalRead(LIMIT_FRONT)){
+        bounceNumCrosses= 0;
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case REALIGNFORWARD4:
+    if(getMovementSignal()){
+      dirCount(9, FORWARD);
+      if(reset==0 && timeLocal >= .25*WAIT_TIME){
+        ArisGameState++;
+        bounceNumCrosses = 0;
+        reset=1;
+        moveDirection(0, STOP);
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case DEPLOYCLAW4:
+    moveDirection(0, STOP);
+    intensity=NO_INTENSITY;
+    if(grabAndPlace(CCW, CLAW_DOWN, CLAW_UP)){
+      reset=1;
+      ArisGameState++;
+      moveDirection(0, STOP);
+    }
+    break;
+
+  case SLIGHTREVERSE5:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal> .25*WAIT_TIME && (dirCount(9, BACKWARD)|| timeLocal >= .4*WAIT_TIME)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        bounceNumCrosses=0;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case REVERSETOLINE5:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal> .25*WAIT_TIME && dirCount(1, BACKWARD)){
+        reset=1;
+        ArisGameState++;
+        moveDirection(0, STOP);
+        bounceNumCrosses=0;
+      }
+    }
+    else
+      moveDirection(0, STOP);
+    break;
+  case OVERSHOOTCHECK5:
+    if(getMovementSignal()){
       if(reset==0 && timeLocal > .5*WAIT_TIME &&  (dirOvershoot(FORWARD)||timeLocal > 1.5*WAIT_TIME)){
         reset=1;
         ArisGameState++;
@@ -550,10 +681,9 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case TURN_TO_CENTER2: 
-    if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CW)){
-        radiationLevel = CARRYING_NEW_ROD;
+  case TURN5:
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .5*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CW)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
@@ -562,36 +692,17 @@ int ArisGame(){
     else
       moveDirection(0, STOP);
     break;
-  case DRIVE_BACK_TO_REACTOR:
-    if(shouldMove && reset==0 && timeLocal > WAIT_TIME){
-      dirCount(2, FORWARD);
-      if(!digitalRead(LIMIT_FRONT)){
-        bounceNumCrosses= 0;
+  case TURN6: 
+    if(getMovementSignal()){
+      if(reset==0 && timeLocal > .5*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CW)){
         reset=1;
-        ArisGameState++;
+        ArisGameState=FORWARDTOLIMIT1;
         moveDirection(0, STOP);
-      }
-    }
-    else
-      moveDirection(0, STOP);
-    break;
-  case DEPOSIT_NEW_ROD:
-    moveDirection(0, STOP);
-    radiationLevel=CARRYING_SPENT_ROD;
-    if(grabAndPlace(CW, CLAW_DOWN, CLAW_UP)){
-      reset=1;
-      ArisGameState++;
-      moveDirection(0, STOP);
-    }
-    break;
-    //bad but yea
-  case TURN5: 
-    if(shouldMove){
-      if(reset==0 && timeLocal > .75*WAIT_TIME && turnAround(WAIT_TIME+ TURN_WAIT_TIME/3, CCW)){
-        radiationLevel = CARRYING_NEW_ROD;
-        reset=1;
-        ArisGameState=DRIVE_TO_REACTOR;
-        moveDirection(0, STOP);
+        if(side==SECOND_SIDE){
+          side = FIRST_SIDE;
+        }
+        else
+          side = SECOND_SIDE;
       }
     }
     else
@@ -607,7 +718,7 @@ int getLS(int lineSensor){
 }
 
 void testLS(){
-  Serial.println("NE-NC-NW-E-SE-SC-SW-W");  
+  Serial.println("NE-NW-E-SE-SW-W");  
   Serial.print(getLS(_NE_LS));
   Serial.print('\t');
   Serial.print(getLS(_NC_LS));
@@ -623,12 +734,11 @@ void testLS(){
   Serial.print(getLS(_SW_LS));
   Serial.print('\t');
   Serial.print(getLS(_W_LS));
-  Serial.print('\t');
 }
 
 boolean dirOvershoot(int dir){
   bounceAdjust();
-  moveAdjusted(13, bounceErrorPowerFront, bounceErrorPowerRear, dir);
+  moveAdjusted(14, bounceErrorPowerFront, bounceErrorPowerRear, dir); //14
   if(getLS(_W_LS)==BLACK&&getLS(_E_LS)==BLACK){
     moveDirection(0,STOP);
     return true;
@@ -643,7 +753,7 @@ boolean dirCount(int crosses, int dir){
   bounceAdjust();
   Serial.println(bounceNumCrosses);
   Serial.println(crosses);
-  moveAdjusted(15, bounceErrorPowerFront, bounceErrorPowerRear, dir);
+  moveAdjusted(35, bounceErrorPowerFront, bounceErrorPowerRear, dir); //15 CHANGE HERE
   if(bounceNumCrosses == crosses){
     bounceNumCrosses=0;
     moveDirection(0,STOP);
@@ -766,8 +876,6 @@ boolean turnAround(int waitTime, char dir){
   if(reset==0 && timeLocal>= waitTime){
     boolean South = turnAroundSouth(0, dir);
     boolean North = turnAroundNorth(0, dir);
-    // boolean South = goToLineSouth(WEST);
-    // boolean North = goToLineNorth(EAST);
     return (South && North) ;
   }
   else
@@ -907,10 +1015,10 @@ boolean turnAroundSouth(int waitTime, char dir){
 //adjusts error speeds for left and right motors
 void bounceAdjust(){
   if(getLS(_NC_LS)==BLACK||getLS(_NE_LS)==BLACK||getLS(_NW_LS)==BLACK){
-    bounceErrorPowerFront = .1*getLS(_NE_LS)-.1*getLS(_NW_LS);
+    bounceErrorPowerFront = .12*getLS(_NE_LS)-.12*getLS(_NW_LS); //.1
   }
   if(getLS(_SC_LS)==BLACK||getLS(_SE_LS)==BLACK||getLS(_SW_LS)==BLACK){
-    bounceErrorPowerRear = .1*getLS(_SW_LS)-.1*getLS(_SE_LS);
+    bounceErrorPowerRear = .12*getLS(_SW_LS)-.12*getLS(_SE_LS);
   }
 
   if(getLS(_E_LS)==BLACK&&getLS(_W_LS)==BLACK){
@@ -924,7 +1032,6 @@ void bounceAdjust(){
 
 //move Right/Left with adjusted speeds
 void moveAdjusted(float spd, float adjSpdFront,float adjSpdBack, int dir){
-  movementStatus = AUTONOMOUS;
   switch(dir){
   case FORWARD:
     MotorSe.write(90 -spd + adjSpdBack*90);
@@ -941,16 +1048,18 @@ void moveAdjusted(float spd, float adjSpdFront,float adjSpdBack, int dir){
   }
 } 
 
-// given grab/place, a first and last position, 
-// it will first move to the first position, grab or place a rod, 
-// and then move to the last location
-// returns true if complete, false otherwise
+//given grab/place, a first and last position, it will first move to the first position, grab or place a rod, and then move to the last location
+//returns true if complete, false otherwise
 boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
   switch(clawState){
   case ARM_FIRST: //go to the first location
-    if(moveArm(firstLocation)){
-      clawState=CLAW_GRABPLACE;
-      reset=1;
+    if(reset==0){
+      if(grabOrPlace==CW)
+        moveClaw(grabOrPlace);
+      if(moveArm(firstLocation)){
+        clawState=CLAW_GRABPLACE;
+        reset=1;
+      }
     }
     break;
   case CLAW_GRABPLACE:
@@ -958,12 +1067,14 @@ boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
       moveClaw(grabOrPlace);
       if(timeLocal>=CLAW_RUN_TIME){
         clawState=ARM_LAST;
+        MotorClaw.write(90);
       }
     }
     Serial.println("No Im here.");
     break;
   case ARM_LAST: //move to the last location
     if(moveArm(lastLocation)){
+      MotorArm.write(90);
       clawState=ARM_FIRST;//resets for next time
       return true;
     }
@@ -975,10 +1086,10 @@ boolean grabAndPlace(int grabOrPlace, int firstLocation, int lastLocation){
 //Spins the claw for CLAW_RUN_TIME ms in the desired direction
 //returns true if complete, false if in process
 void moveClaw(char dir){
-  if(dir == CW){
+  if(dir==CW){
     MotorClaw.write(180);
   }
-  else if(dir == CCW){
+  else if(dir==CCW){
     MotorClaw.write(0);
   }
   else{
@@ -989,7 +1100,6 @@ void moveClaw(char dir){
 //Moves the arm to the desired position based on limit switches
 //returns true if complete, false if in motion
 boolean moveArm(int pos){
-  return true; //CHANGE ME
   //sets current position
   if(!digitalRead(LIMIT_CLAW_UP)){ 
     currentPositionClaw=CLAW_UP;
@@ -1003,19 +1113,45 @@ boolean moveArm(int pos){
   //if you want to be where you are, stop
   //otherwise, go there
   if(pos==CLAW_UP){
-    MotorArm.write(70);
+    MotorArm.write(140);
     Serial.println("GO UP");
   }
   else if(pos==CLAW_DOWN){
-    MotorArm.write(110);
+    MotorArm.write(70);
     Serial.println("GO DOWN");
   }
-  if(pos==currentPositionClaw){
+  else if(pos==SUPPLY){
+    if(timeLocal>= 1.2* WAIT_TIME){
+      MotorArm.write(140);
+    }
+    else
+      goToSupply();
+  }
+  if(pos==currentPositionClaw || (pos==SUPPLY && timeLocal>=1.5*WAIT_TIME)){
     MotorArm.write(90);
     Serial.println("GOOD JOB");
     return true;
   }
   return false;
+}
+
+void goToSupply(){
+  float error = SUPPLY_POSITION - analogRead(POTENTIOMETER); // between 0 and +- ~700
+  float normalError =  error / (ARM_DOWN_POSITION - ARM_UP_POSITION);
+  if(normalError < 0) normalError = -sqrt(-normalError);
+  else normalError = sqrt(normalError); // quadratic
+  int speedArm = 90 - normalError * 90;
+  // make sure speed is within bounds
+  if(speedArm < 0)   speedArm = 0;
+  if(speedArm > 180) speedArm = 180;
+  if(abs(error) < 4) { // don't run if we're close enough
+    speedArm = 90;
+  }
+  Serial.print(error);
+  Serial.print("   ");
+  Serial.println(speedArm);
+  MotorArm.write(speedArm);
+  currentPositionPot = analogRead(POTENTIOMETER);
 }
 
 //tests motors by going in different directions
@@ -1054,19 +1190,31 @@ void motorTest(){
   delay(200);
 }
 
+//teleoperated control
+void teleop() {
+  front_back = ppm.getChannel(2);
+  left_right = ppm.getChannel(1);
+  Serial.println(left_right);
+  Serial.println(front_back);
+  MotorNw.write(180-front_back);
+  MotorSe.write(front_back);
+  MotorNe.write(left_right);
+  MotorSw.write(180-left_right);
+}
+
 // given a power and a direction, it will turn the robot in that direction
 void turnDirection(double power, int dir){
-  if(dir == CCW){
-    MotorNe.write(90 - power * 90);
-    MotorSe.write(90 - power * 90);
-    MotorSw.write(90 - power * 90);
-    MotorNw.write(90 - power * 90);
+  if(dir==CCW){
+    MotorNe.write(90 - power*90);
+    MotorSe.write(90 - power*90);
+    MotorSw.write(90 - power*90);
+    MotorNw.write(90 - power*90);
   }  
-  else if(dir == CW){
-    MotorNe.write(90 + power * 90);
-    MotorSe.write(90 + power * 90);
-    MotorSw.write(90 + power * 90);
-    MotorNw.write(90 + power * 90);
+  else if(dir==CW){
+    MotorNe.write(90 + power*90);
+    MotorSe.write(90 + power*90);
+    MotorSw.write(90 + power*90);
+    MotorNw.write(90 + power*90);
   } 
   else{
     MotorNe.write(90);
@@ -1080,7 +1228,6 @@ void turnDirection(double power, int dir){
 void moveDirection(double power, char dir) {
   if(power > 1) power = 1;
   if(power < 0) power = 0;
-  movementStatus = AUTONOMOUS;
   switch(dir) {
   case FORWARD_LEFT:
     MotorNe.write(90);
@@ -1097,13 +1244,13 @@ void moveDirection(double power, char dir) {
   case BACKWARD_LEFT:
     MotorNe.write(90 - 90 *power);
     MotorSe.write(90);
-    MotorSw.write(90 + 90 * power);
+    MotorSw.write(90 + 90*power);
     MotorNw.write(90);
     break;
   case FORWARD_RIGHT:
     MotorNe.write(90 + 90 *power);
     MotorSe.write(90);
-    MotorSw.write(90 - 90 * power);
+    MotorSw.write(90 - 90*power);
     MotorNw.write(90);
     break;
   case STOP:
@@ -1111,7 +1258,6 @@ void moveDirection(double power, char dir) {
     MotorSw.write(90);
     MotorNw.write(90);
     MotorSe.write(90);
-    movementStatus = STOPPED;
     break;
   case RIGHT:
     MotorNe.write(90 + 90 * power);
