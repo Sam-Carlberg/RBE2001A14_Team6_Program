@@ -9,24 +9,31 @@
 
 // pins
 // These are the only pins where 393s will work. No idea why
-const static byte MOTOR_SW = 8;
-const static byte MOTOR_NE = 6;
-const static byte MOTOR_NW = 12;
-const static byte MOTOR_SE = 13;
+const static int MOTOR_SW = 8;
+const static int MOTOR_NE = 6;
+const static int MOTOR_NW = 12;
+const static int MOTOR_SE = 13;
 
-const static byte MOTOR_ARM = 11;
-const static byte MOTOR_CLAW = 10;
+const static int MOTOR_ARM = 11;
+const static int MOTOR_CLAW = 10;
 
 // speeds
-const static byte MOTOR_MAX_CW 	= 180;
-const static byte MOTOR_STOP 	  = 90;
-const static byte MOTOR_MAX_CCW = 0;
+const static int MOTOR_MAX_CW 	= 180;
+const static int MOTOR_STOP 	= 90;
+const static int MOTOR_MAX_CCW = 0;
 
 /*
  *  LINE SENSOR CONSTANTS
  */
 
-const static byte BLACK = 1;
-const static byte WHITE = 0;
+const static int BLACK = 1;
+const static int WHITE = 0;
+
+const static int ARM_POT_PIN = A6;
+
+const static int ARM_UP     = 163;
+const static int ARM_DOWN   = 856;
+const static int ARM_SUPPLY = 250; // tune this
+const static int ARM_TOLERANCE = 10;
 
 #endif

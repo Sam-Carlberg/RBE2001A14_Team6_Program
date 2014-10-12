@@ -3,6 +3,7 @@
 
 PID::PID(double p, double i, double d, double minOut, double maxOut): 
 _p(p), _i(i), _d(d), _minOut(minOut), _maxOut(maxOut) { 
+  reset();
 }
 
 double PID::get() {
@@ -27,10 +28,12 @@ double PID::update(double input) {
   }
 
   _error = _setpoint - input;
+  Serial.println(_error);
   _iTerm += _error * dt / 1000.0;
   _dTerm = (_error - _lastError) * 1000.0 / dt;
 
   _output = _p * _error + _i * _iTerm - _d * _dTerm;
+  Serial.println("Output = " + String(_output));
 
   if (_output > _maxOut) _output = _maxOut;
   if (_output < _minOut) _output = _minOut;

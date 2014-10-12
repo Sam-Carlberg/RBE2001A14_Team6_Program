@@ -15,6 +15,7 @@
 #include "Constants.h"
 #include "Servo.h"
 #include "TimerOne.h"
+#include "PID.h"
 
 //PINS
 #define MOTOR_SW  8  //SOUTH
@@ -118,7 +119,7 @@ int turnAroundNorthState = INIT_GO_TO_LINE;
 #define CLAW_DOWN 0
 #define CLAW_RUN_TIME 3000 //ms
 
-int currentPositionClaw=7;
+int currentPositionClaw = 7;
 int clawState;
 
 //LED radiation
@@ -277,14 +278,16 @@ void setup(){
 
 void loop(){
   // readPacket();
-  tryStart();
+  // tryStart();
   if(started) {
     // sendMessages();
     // playGameBT();
     // setRadiationLED();
-    while(!grabAndPlace(CCW,CLAW_UP, CLAW_UP));
-    while(1);
+    // while(!grabAndPlace(CCW,CLAW_UP, CLAW_UP));
+    // while(1);
+    // armToPoint(ARM_DOWN);
   }
+  armToPoint((ARM_DOWN + ARM_UP) / 2 - 120);
 }
 
 // moved to a function to declutter loop()
@@ -1477,4 +1480,34 @@ byte getDirToSupply() {
   else return CW;
 }
 
+void armToPoint(int setpoint) {
 
+  int error = setpoint - analogRead(ARM_POT_PIN); // between 0 and +- ~700
+  int normalError = (float) error / (ARM_DOWN - ARM_UP);
+  
+  if(normalError < 0) normalError = -sqrt(-normalError);
+  else normalError = sqrt(normalError); // quadratic
+
+  int speed = 90 - normalError * 90;
+
+  // make sure speed is within bounds
+  if(speed < 0)   speed = 0;
+  if(speed > 180) speed = 180;
+
+  if(abs(error) < ARM_TOLERANCE) { // don't run if we're close enough
+    speed = 90;
+  }
+
+  if(!digitalRead(LIMIT_CLAW_UP) || !digitalRead(LIMIT_CLAW_DOWN)) { // don't run if limit switches are hit
+    speed = 90;
+  }
+
+  MotorArm.write(speed);
+
+  if(debug) {
+    Serial.print("Setpoint: " + String(setpoint) + " actually: " + String(analogRead(ARM_POT_PIN)) + "\t");
+    Serial.print("Error: " + String(error) + "\t");
+    Serial.println("Speed: " + String(speed));
+  }
+
+}
