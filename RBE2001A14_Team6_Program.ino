@@ -284,9 +284,7 @@ void loop(){
 // moved to a function to declutter loop()
 void tryStart() {
   if(!started) {
-    if(digitalRead(START_BUTTON_PIN) == LOW) {
-      started = !started;
-    }
+    started = digitalRead(START_BUTTON_PIN) == LOW;
     if(started) {
       digitalWrite(LED_START, HIGH);
     }
