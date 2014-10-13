@@ -646,9 +646,11 @@ int ArisGame(){
 
   case SLIGHTREVERSE5:
     if(getMovementSignal()){
-      if(reset==0 && timeLocal> .25*WAIT_TIME && (dirCount(9, BACKWARD)|| timeLocal >= .4*WAIT_TIME)){
+      if(reset==0 && timeLocal> .25*WAIT_TIME && (dirCount(9, BACKWARD)|| timeLocal >= .5*WAIT_TIME)){
         reset=1;
-        ArisGameState++;
+        ArisGameState+=4;
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
         moveDirection(0, STOP);
         bounceNumCrosses=0;
       }
@@ -658,11 +660,13 @@ int ArisGame(){
     break;
   case REVERSETOLINE5:
     if(getMovementSignal()){
-      if(reset==0 && timeLocal> .25*WAIT_TIME && dirCount(1, BACKWARD)){
+      if(reset==0 && timeLocal> .25*WAIT_TIME && dirCount(2, BACKWARD)){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
         bounceNumCrosses=0;
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
       }
     }
     else
@@ -687,6 +691,8 @@ int ArisGame(){
         reset=1;
         ArisGameState++;
         moveDirection(0, STOP);
+        turnAroundNorthState = INIT_GO_TO_LINE;
+        turnAroundSouthState = INIT_GO_TO_LINE;
       }
     }
     else
