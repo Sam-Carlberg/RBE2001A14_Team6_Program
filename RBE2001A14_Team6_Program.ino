@@ -2,7 +2,7 @@
  * 
  * OUTLINE:
  * 
- * 1. Global variables and objects (25 to 114)
+ * 1. Global variables and objects
  * 2. Interrupts
  * 3. Setup
  * 4. Loop
